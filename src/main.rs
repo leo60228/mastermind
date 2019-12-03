@@ -1,9 +1,10 @@
 use arrayvec::ArrayVec;
-use fn_memo::{FnMemo, sync, recur_fn::direct};
-use std::collections::BTreeSet;
+use itertools::Itertools;
+use rayon::prelude::*;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{TryFrom, TryInto};
 use std::io;
-use rayon::prelude::*;
+use rand::prelude::*;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Digit {
@@ -113,19 +114,52 @@ pub fn check(code: Code, guess: Code) -> (u8, u8) {
         })
 }
 
-pub fn break_code(mut good: impl FnMut(Code) -> (u8, u8)) -> Option<Code> {
-    let checker = sync::chashmap::memoize(direct(|(c, g)| check(c, g)));
-    let mut guesses: BTreeSet<_> = (0..=999999).map(Code::from).collect();
-    while guesses.len() > 1 {
-        let guess = *guesses
+pub fn possibilities<'a>(guess: Code, guesses: &'a BTreeMap<Code, (u8, u8)>) -> impl ParallelIterator<Item = (u8, u8)> + 'a {
+    guesses
+        .par_iter()
+        .flat_map(move |(g2, (good, miss))| {
+            let good = 0..=guess
+                .0
                 .iter()
-                //.min_by_key(|g| guesses.iter().max_by_key(|g2| checker.call((**g, **g2))))
-                .next()
-                .unwrap();
+                .zip(g2.0.iter())
+                .filter(|(x, y)| x == y)
+                .count()
+                .min((*good).into());
+            let miss = 0..=guess
+                .0
+                .iter()
+                .filter(|x| g2.0.iter().any(|y| *x == y))
+                .count()
+                .min((*miss).into());
+            good.cartesian_product(miss).par_bridge()
+        })
+        .map(|(x, y)| (x as u8, y as u8))
+}
+
+pub fn break_code(mut good: impl FnMut(Code) -> (u8, u8)) -> Option<Code> {
+    let mut guesses: BTreeSet<_> = (0..=999999).map(Code::from).collect();
+    let mut prev = BTreeMap::new();
+    while guesses.len() > 1 {
+        let guess: Code = if prev.len() == 0 {
+            111222_u32.into()
+        } else {
+            *guesses
+                .par_iter()
+                .filter(|_| thread_rng().gen_range(0, 500) == 0) // probabilistic: 1 million guesses is too many
+                .max_by_key(|&&g| {
+                    guesses.len()
+                        - possibilities(g, &prev)
+                            .map(|p| guesses.par_iter().filter(|&&g2| check(g2, g) != p).count())
+                            .min()
+                            .unwrap()
+                })
+                .unwrap_or_else(|| guesses.iter().next().unwrap())
+        };
         let resp = good(guess);
+        prev.insert(guess, resp);
         guesses = guesses
             .into_par_iter()
-            .filter(|g| checker.call((*g, guess)) == resp)
+            .filter(|g| check(*g, guess) == resp)
             .collect();
     }
     guesses.iter().next().map(|&x| x)
