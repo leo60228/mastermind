@@ -136,6 +136,10 @@ pub fn possibilities<'a>(guess: Code, guesses: &'a BTreeMap<Code, (u8, u8)>) -> 
         .map(|(x, y)| (x as u8, y as u8))
 }
 
+fn div_ceil(x: usize, y: usize) -> usize {
+    (x - 1) / y + 1
+}
+
 pub fn break_code(mut good: impl FnMut(Code) -> (u8, u8)) -> Option<Code> {
     let mut guesses: BTreeSet<_> = (0..=999999).map(Code::from).collect();
     let mut prev = BTreeMap::new();
@@ -145,7 +149,7 @@ pub fn break_code(mut good: impl FnMut(Code) -> (u8, u8)) -> Option<Code> {
         } else {
             *guesses
                 .par_iter()
-                .filter(|_| thread_rng().gen_range(0, 500) == 0) // probabilistic: 1 million guesses is too many
+                .filter(|_| thread_rng().gen_range(0, div_ceil(guesses.len(), 2000)) == 0) // probabilistic: 1 million guesses is too many
                 .max_by_key(|&&g| {
                     guesses.len()
                         - possibilities(g, &prev)
